@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 LIB_RS = ROOT / "contracts" / "sorobanlard" / "src" / "lib.rs"
 README = ROOT / "README.md"
 
-PUB_FN_RE = re.compile(r"^    pub fn ([a-z_][a-z0-9_]*)\(")
+PUB_FN_NAME_RE = re.compile(r"^    pub fn ([a-z_][a-z0-9_]*)")
 
 
 def public_functions(source):
@@ -30,19 +30,26 @@ def public_functions(source):
     lines = source.splitlines()
     index = 0
     while index < len(lines):
-        match = PUB_FN_RE.match(lines[index])
+        match = PUB_FN_NAME_RE.match(lines[index])
         if not match:
             index += 1
             continue
 
         name = match.group(1)
+        # Accumulate lines until we find the opening '(' of the parameter list.
         header = []
         cursor = index
         while True:
             header.append(lines[cursor])
+            if "(" in lines[cursor]:
+                break
+            cursor += 1
+        # Continue accumulating until the closing '{' that ends the signature.
+        while True:
             if lines[cursor].rstrip().endswith("{"):
                 break
             cursor += 1
+            header.append(lines[cursor])
         signature = " ".join(header)
         params = signature[signature.index("(") + 1 : signature.rindex(")")]
 
