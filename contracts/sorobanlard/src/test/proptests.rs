@@ -67,6 +67,11 @@ struct Enrolled {
     student: Address,
     course_id: String,
     student_start: i128,
+    treasury_balance_start: i128,
+    contract_balance_start: i128,
+    instructor_balance_start: i128,
+    instructor_earnings_start: i128,
+    instructor_total_earnings_start: i128,
 }
 
 fn enroll_with(price: i128, token_fee_bps: u32, course_fee_pct: u32) -> Enrolled {
@@ -100,7 +105,13 @@ fn enroll_with(price: i128, token_fee_bps: u32, course_fee_pct: u32) -> Enrolled
     if price > 0 {
         token::StellarAssetClient::new(&env, &token_id).mint(&student, &price);
     }
-    let student_start = token::Client::new(&env, &token_id).balance(&student);
+    let token_client = token::Client::new(&env, &token_id);
+    let student_start = token_client.balance(&student);
+    let treasury_balance_start = token_client.balance(&treasury);
+    let contract_balance_start = token_client.balance(&contract_id);
+    let instructor_balance_start = token_client.balance(&instructor);
+    let instructor_earnings_start = client.get_instructor_earnings(&instructor, &token_id);
+    let instructor_total_earnings_start = client.get_instructor_total_earnings(&instructor);
 
     client.enroll(&student, &course_id);
 
@@ -114,6 +125,11 @@ fn enroll_with(price: i128, token_fee_bps: u32, course_fee_pct: u32) -> Enrolled
         student,
         course_id,
         student_start,
+        treasury_balance_start,
+        contract_balance_start,
+        instructor_balance_start,
+        instructor_earnings_start,
+        instructor_total_earnings_start,
     }
 }
 
@@ -235,6 +251,31 @@ proptest! {
         prop_assert_eq!(client.get_instructor_total_earnings(&e.instructor), instructor);
     }
 
+    /// A free enrollment leaves every token balance and instructor earnings
+    /// unchanged, regardless of the configured fee inputs.
+    #[test]
+    fn prop_zero_price_enroll_moves_no_tokens(
+        token_fee in fee_bps(),
+        course_fee_pct in 0u32..=100,
+    ) {
+        let e = enroll_with(0, token_fee, course_fee_pct);
+        let client = SorobanLardContractClient::new(&e.env, &e.contract_id);
+        let token_client = token::Client::new(&e.env, &e.token_id);
+
+        prop_assert_eq!(token_client.balance(&e.student), e.student_start);
+        prop_assert_eq!(token_client.balance(&e.treasury), e.treasury_balance_start);
+        prop_assert_eq!(token_client.balance(&e.instructor), e.instructor_balance_start);
+        prop_assert_eq!(token_client.balance(&e.contract_id), e.contract_balance_start);
+        prop_assert_eq!(
+            client.get_instructor_earnings(&e.instructor, &e.token_id),
+            e.instructor_earnings_start
+        );
+        prop_assert_eq!(
+            client.get_instructor_total_earnings(&e.instructor),
+            e.instructor_total_earnings_start
+        );
+    }
+
     /// Issue #77: for prices that are not multiples of 100 the percentage
     /// split leaves a division remainder. The documented rule is truncation:
     /// `platform = price * pct / 100` (integer division, remainder dropped),
@@ -268,6 +309,29 @@ proptest! {
         prop_assert!(platform >= 0 && instructor >= 0);
         // The remainder (if any) is retained by the instructor share.
         prop_assert_eq!(instructor, price - price * effective_pct / 100);
+
+        prop_assert_eq!(token_client.balance(&e.student), e.student_start - price);
+        prop_assert_eq!(token_client.balance(&e.treasury), platform);
+        prop_assert_eq!(token_client.balance(&e.contract_id), instructor);
+        prop_assert_eq!(
+            client.get_instructor_earnings(&e.instructor, &e.token_id),
+            instructor
+        );
+        prop_assert_eq!(client.get_instructor_total_earnings(&e.instructor), instructor);
+    }
+
+    /// `withdraw_earnings()` moves exactly the requested amount (or the full
+    /// balance for `amount = 0`), never leaves a negative balance, and
+    /// rejects over-withdrawals and negative amounts.
+    #[test]
+    fn prop_withdraw_earnings_conserves_value(
+        price in course_price(),
+        token_fee in fee_bps(),
+        withdraw_permille in 0u32..=1_000,
+        over_by in 1i128..=i128::MAX / 2,
+        negative in i128::MIN..0i128,
+    ) {
+        let e = enroll_with(pric
     }
 
     /// `withdraw_earnings()` moves exactly the requested amount (or the full
