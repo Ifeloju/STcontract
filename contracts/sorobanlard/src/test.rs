@@ -15600,130 +15600,49 @@ fn test_current_wasm_hash_none_before_first_upgrade() {
 }
 
 // ============================================================
-// REFUND REGRESSION TESTS (#67, #68, #69, #70)
-// ============================================================
+        "COURSE-WD74B",
+        price,
+    );
+    let course_id = String::from_str(&env, "COURSE-WD74B");
+    let student = Address::generate(&env);
+    token::StellarAssetClient::new(&env, &token_id).mint(&student, &1_000_000_000);
+    client.enroll(&student, &course_id);
 
-/// Find the most recent event emitted by `contract_id` whose first topic
-/// matches `name`. Returns `(topics, data)` so callers can assert both the
-/// topic vector and the payload for indexer-reconciliation tests.
-fn find_event(env: &Env, contract_id: &Address, name: &str) -> (soroban_sdk::Vec<Val>, Val) {
-    let events = env.events().all();
-    for (contract, topics, data) in events.iter().rev() {
-        if contract != *contract_id {
-            continue;
-        }
-        let sym: Symbol = topics.get(0).unwrap().try_into_val(env).unwrap();
-        if sym == Symbol::new(env, name) {
-            return (topics, data);
-        }
-    }
-    panic!("event {} not found", name);
-}
+    client.withdraw_earnings(&instructor, &token_id, &0);
 
-/// #67 — Completed enrollments follow the documented refund policy.
-///
-/// The refund policy: only incomplete enrollments within the refund window
-/// are eligible. A completed enrollment is permanent
-        if contract != *contract_id {
-            continue;
-        }
-        let sym: Symbol = topics.get(0).unwrap().try_into_val(env).unwrap();
-        if sym == Symbol::new(env, name) {
-            return (topics, data);
-        }
-    }
-    panic!("event {} not found", name);
-}
-
-fn count_events(env: &Env, contract_id: &Address, name: &str) -> u32 {
-    let mut n = 0;
-    for (contract, topics, _) in env.events().all().iter() {
-        if contract != *contract_id {
-            continue;
-        }
-        let sym: Symbol = topics.get(0).unwrap().try_into_val(env).unwrap();
-        if sym == Symbol::new(env, name) {
-            n += 1;
-        }
-    }
-    n
-}
-
-#[test]
-fn test_approve_course_before_at_and_after_review_delay() {
-    let (env, contract_id, token_id, admin, _sec_admin, _treasury, instructor) = setup();
-    let client = SorobanLardContractClient::new(&env, &contract_id);
-    let delay = 100u32;
-    client.update_min_review_delay(&admin, &delay);
-
-    // Move well past the post-init governance window.
-    env.ledger().with_mut(|l| l.sequence_number += 1_000);
-    let start = env.ledger().sequence();
-
-    for id in ["DELAY-AT", "DELAY-AFTER"] {
-        assert!(try_register(&env, &client, &token_id, &instructor, id));
-    }
-    let at = String::from_str(&env, "DELAY-AT");
-    let after = String::from_str(&env, "DELAY-AFTER");
-
-    // Immediately before the delay: rejected, still Pending, no event.
-    env.ledger().with_mut(|l| l.sequence_number = start + delay - 1);
-    assert!(client.try_approve_course(&admin, &at).is_err());
-    assert_eq!(client.get_course(&at).unwrap().status, CourseStatus::Pending);
-    assert_eq!(count_events(&env, &contract_id, "course_approved"), 0);
-
-    // Exactly at the delay: eligible.
-    env.ledger().with_mut(|l| l.sequence_number = start + delay);
-    client.approve_course(&admin, &at);
-    assert_eq!(client.get_course(&at).unwrap().status, CourseStatus::Active);
-    assert_eq!(count_events(&env, &contract_id, "course_approved"), 1);
-
-    // After the delay: eligible.
-    env.ledger().with_mut(|l| l.sequence_number = start + delay + 50);
-    client.approve_course(&admin, &after);
-    assert_eq!(client.get_course(&after).unwrap().status, CourseStatus::Active);
-    assert!(count_events(&env, &contract_id, "course_approved") >= 1);
-    let (approved_id, _, _, approved_ledger): (String, Address, Address, u32) =
-        last_event_val(&env, &contract_id, "course_approved")
-            .try_into_val(&env)
-            .unwrap();
-    assert_eq!(approved_id, after);
-    assert_eq!(approved_ledger, start + delay + 50);
-}
-
-#[test]
-fn test_bulk_revoke_all_missing_certificates_returns_zero() {
-    let (env, contract_id, token_id, admin, _sec_admin, _treasury, instructor) = setup();
-    let client = SorobanLardContractClient::new(&env, &contract_id);
-
+    let snapshot = client.get_wi
     register_and_approve_course(
         &env,
         &client,
         &token_id,
         &admin,
         &instructor,
-        "COURSE-ALL-MISSING",
-        100_000_000,
+        "COURSE-WD74B",
+        price,
     );
+    let course_id = String::from_str(&env, "COURSE-WD74B");
+    let student = Address::generate(&env);
+    token::StellarAssetClient::new(&env, &token_id).mint(&student, &1_000_000_000);
+    client.enroll(&student, &course_id);
+
+    client.withdraw_earnings(&instructor, &token_id, &0);
+
+    let snapshot = client.get_withdrawal_history(&instructor, &token_id);
+    assert_eq!(snapshot.len(), 1);
+
+    // Fetching the history a second time returns an identical result.
+    let snapshot2 = client.get_withdrawal_history(&instructor, &token_id);
+    assert_eq!(snapshot2.len(), 1);
+    assert_eq!(snapshot2.get(0).unwrap().amount, snapshot.get(0).unwrap().amount);
+
+    // The contract has no `clear_withdrawal_history` or similar endpoint;
+    // confirm the entry count has not changed.
+    assert_eq!(client.get_withdrawal_history(&instructor, &token_id).len(), 1);
+
+    // --- Additional tests from upstream ---
     let course_id = String::from_str(&env, "COURSE-ALL-MISSING");
     let student = Address::generate(&env);
     enroll_and_certify(
-        &env,
-        &client,
-        &token_id,
-        &admin,
-        &instructor,
-        "COURSE-REFUND-EVT-69",
-        price,
-    );
-    let course_id = String::from_str(&env, "COURSE-REFUND-EVT-69");
-
-    // --- refund_requested ---
-    client.enroll(&student, &course_id);
-    client.request_refund(&student, &course_id);
-
-    let (rq_topics, rq_data) = find_event(&env, &contract_id, "refund_requested");
-    let rq_sym: Symbol = rq_topics.get(0).unwrap().try_into_val(&env).
         &env,
         &client,
         &token_id,

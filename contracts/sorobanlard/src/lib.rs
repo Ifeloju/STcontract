@@ -607,6 +607,21 @@ pub struct InstructorStats {
     pub total_certificates: u32,
 }
 
+/// A single entry in an instructor's append-only withdrawal history.
+/// One record is written per successful `withdraw_earnings()` call.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct WithdrawalRecord {
+    /// Instructor address that received the payout.
+    pub instructor: Address,
+    /// Token contract address used for the payout.
+    pub token: Address,
+    /// Amount transferred in stroops.
+    pub amount: i128,
+    /// Ledger sequence when the withdrawal was executed.
+    pub ledger: u32,
+}
+
 // ============================================================
 // STORAGE KEYS
 // ============================================================
@@ -813,6 +828,10 @@ contract_data_key! {
         /// conform to. Absent means `STORAGE_SCHEMA_VERSION_INITIAL`. Advanced
         /// only by `migrate()`.
         StorageSchemaVersion,
+        /// Append-only ordered list of `WithdrawalRecord` entries for an
+        /// (instructor, token) pair. Written by `withdraw_earnings()` on every
+        /// successful payout. Read by `get_withdrawal_history()`.
+        WithdrawalHistory(Address, Address),
     }
 }
 
@@ -3609,10 +3628,46 @@ impl SorobanLardContract {
             &withdraw_amount,
         );
 
+        // Append an immutable record to the per-(instructor, token) history.
+        let history_key =
+            DataKey2::WithdrawalHistory(instructor.clone(), token.clone());
+        let mut history: Vec<WithdrawalRecord> = env
+            .storage()
+            .persistent()
+            .get(&history_key)
+            .unwrap_or_else(|| Vec::new(&env));
+        history.push_back(WithdrawalRecord {
+            instructor: instructor.clone(),
+            token: token.clone(),
+            amount: withdraw_amount,
+            ledger: env.ledger().sequence(),
+        });
+        env.storage().persistent().set(&history_key, &history);
+        env.storage().persistent().extend_ttl(
+            &history_key,
+            Self::PERSISTENT_TTL_THRESHOLD,
+            Self::PERSISTENT_TTL_EXTEND_TO,
+        );
+
         env.events().publish(
             (Symbol::new(&env, "earnings_withdrawn"), instructor.clone()),
             (token, withdraw_amount),
         );
+    }
+
+    /// Returns the ordered, append-only list of past withdrawals for an
+    /// (instructor, token) pair. The list is written only by `withdraw_earnings`
+    /// and there is no mutation endpoint, so callers can rely on it being an
+    /// accurate audit trail.
+    pub fn get_withdrawal_history(
+        env: Env,
+        instructor: Address,
+        token: Address,
+    ) -> Vec<WithdrawalRecord> {
+        env.storage()
+            .persistent()
+            .get(&DataKey2::WithdrawalHistory(instructor, token))
+            .unwrap_or_else(|| Vec::new(&env))
     }
 
     /// Get accumulated earnings for an instructor and token pair
